@@ -1,116 +1,153 @@
-# Security Guidelines for codeguide-starter
+# Security Guidelines for Project Profit & Loss Tracker
 
-This document defines mandatory security principles and implementation best practices tailored to the **codeguide-starter** repository. It aligns with Security-by-Design, Least Privilege, Defense-in-Depth, and other core security tenets. All sections reference specific areas of the codebase (e.g., `/app/api/auth/route.ts`, CSS files, environment configuration) to ensure practical guidance.
-
----
-
-## 1. Security by Design
-
-• Embed security from day one: review threat models whenever adding new features (e.g., new API routes, data fetching).
-• Apply “secure defaults” in Next.js configuration (`next.config.js`), enabling strict mode and disabling debug flags in production builds.
-• Maintain a security checklist in your PR template to confirm that each change has been reviewed against this guideline.
+This document provides security requirements and best practices tailored to the **Project Profit & Loss Tracker**—a full-stack Next.js application with PostgreSQL, Drizzle ORM, Shadcn/ui, and `better-auth`. These guidelines align with industry-standard security principles and cover authentication, data protection, input validation, API hardening, infrastructure, and deployment.
 
 ---
+## 1. Core Security Principles
 
+1. **Security by Design**: Embed security from day one—design your models, APIs, and UI with threats in mind.
+2. **Least Privilege**: Grant minimal permissions to users, services, and database roles.
+3. **Defense in Depth**: Layer controls (firewalls, WAF, input validation, output encoding) to avoid single points of failure.
+4. **Input Validation & Output Encoding**: Treat all inputs as untrusted; validate on server with Zod and escape or encode outputs in HTML/JSON responses.
+5. **Fail Securely**: Handle errors gracefully; never leak stack traces or sensitive data to clients or logs.
+6. **Secure Defaults**: Use safe default configurations (e.g., `HttpOnly`/`Secure` cookies, strict CSP, disabled debug in production).
+7. **Keep Security Simple**: Favor clear, maintainable patterns over complex home-grown solutions.
+
+---
 ## 2. Authentication & Access Control
 
-### 2.1 Password Storage
-- Use **bcrypt** (or Argon2) with a per-user salt to hash passwords in `/app/api/auth/route.ts`.
-- Enforce a strong password policy on both client and server: minimum 12 characters, mixed case, numbers, and symbols.
+### 2.1 User Authentication
+- Use `better-auth` or a comparable library configured to:
+  - Enforce strong password policy: minimum length (12+), complexity (uppercase, numeric, special), expiration as needed.
+  - Hash passwords with Argon2 or bcrypt + unique salt per user.
+  - Protect endpoints against brute-force (rate limit login attempts).
 
 ### 2.2 Session Management
-- Issue sessions via Secure, HttpOnly, SameSite=strict cookies. Do **not** expose tokens to JavaScript.
-- Implement absolute and idle timeouts. For example, invalidate sessions after 30 minutes of inactivity.
-- Protect against session fixation by regenerating session IDs after authentication.
+- Use secure, signed cookies with:
+  - `HttpOnly` and `Secure` flags
+  - `SameSite=Strict` or `Lax` to mitigate CSRF on mutating requests
+- Enforce both idle timeout (e.g., 15–30 minutes) and absolute timeout (e.g., 24 hours).
+- Invalidate session server-side on logout or password change.
+- Prevent session fixation: always issue new session ID after authentication.
 
-### 2.3 Brute-Force & Rate Limiting
-- Apply rate limiting at the API layer (e.g., using `express-rate-limit` or Next.js middleware) on `/api/auth` to throttle repeated login attempts.
-- Introduce exponential backoff or temporary lockout after N failed attempts.
+### 2.3 Role-Based Access Control (RBAC)
+- Define roles (e.g., Admin, Project Manager, Viewer).
+- Protect every API route and page server-side by checking the user’s role before any business logic executes.
+- Never trust client-submitted roles or IDs—derive from session or JWT claims.
 
-### 2.4 Role-Based Access Control (Future)
-- Define user roles in your database model (e.g., `role = 'user' | 'admin'`).
-- Enforce server-side authorization checks in every protected route (e.g., in `dashboard/layout.tsx` loader functions).
+### 2.4 Multi-Factor Authentication (MFA)
+- For sensitive actions (e.g., exporting financial reports), encourage or require MFA (TOTP or SMS/email OTP).
 
 ---
-
 ## 3. Input Handling & Processing
 
-### 3.1 Validate & Sanitize All Inputs
-- On **client** (`sign-up/page.tsx`, `sign-in/page.tsx`): perform basic format checks (email regex, password length).
-- On **server** (`/app/api/auth/route.ts`): re-validate inputs with a schema validator (e.g., `zod`, `Joi`).
-- Reject or sanitize any unexpected fields to prevent injection attacks.
+### 3.1 Server-Side Validation
+- Use Zod schemas in both API routes and client forms to validate:
+  - Project fields: `name` (nonempty string), `budget` (positive number)
+  - Expense fields: `amount` (positive numeric), `date` (ISO date), `description` (max length)
+  - Invoice fields: `amount`, `dueDate`, `status` (enum)
+- Reject any requests that fail schema validation before database interaction.
 
-### 3.2 Prevent Injection
-- If you introduce a database later, always use parameterized queries or an ORM (e.g., Prisma) rather than string concatenation.
-- Avoid dynamic `eval()` or template rendering with unsanitized user input.
+### 3.2 Preventing Injection Attacks
+- Use Drizzle ORM’s parameterized queries exclusively—never interpolate user input into raw SQL.
+- For PostgreSQL stored procedures or custom SQL, use prepared statements.
 
-### 3.3 Safe Redirects
-- When redirecting after login or logout, validate the target against an allow-list to prevent open redirects.
+### 3.3 XSS & Output Encoding
+- Encode dynamic content in React components by default. Avoid `dangerouslySetInnerHTML` unless sanitized.
+- Implement a strict Content Security Policy (CSP) via `next.config.js` and HTTP headers:
+  - `default-src 'self'`
+  - `script-src 'self' 'sha256-…'`
+  - `style-src 'self' 'unsafe-inline'` (if Tailwind inline styles needed)
+
+### 3.4 CSRF Protection
+- Use `csrf` tokens for all state-changing API routes.
+- For Next.js API Routes, integrate `next-csrf` or equivalent middleware.
+
+### 3.5 File Uploads (if applicable)
+- Validate file type, size, and content client- and server-side.
+- Store uploads outside the webroot and serve via signed URLs if needed.
+- Sanitize filenames to prevent path traversal.
 
 ---
-
 ## 4. Data Protection & Privacy
 
-### 4.1 Encryption & Secrets
-- Enforce HTTPS/TLS 1.2+ for all front-end ↔ back-end communications.
-- Never commit secrets—use environment variables and a secrets manager (e.g., AWS Secrets Manager, Vault).
+### 4.1 Encryption in Transit & at Rest
+- Enforce HTTPS/TLS 1.2+ on every endpoint (frontend, API, DB connections).
+- Enable TLS between Next.js server and PostgreSQL.
+- For highly sensitive fields (e.g., PII), consider AES-256 field-level encryption.
 
-### 4.2 Sensitive Data Handling
-- Do ​not​ log raw passwords, tokens, or PII in server logs. Mask or redact any user identifiers.
-- If storing PII in `data.json` or a future database, classify it and apply data retention policies.
+### 4.2 Secrets Management
+- Do **not** commit secrets to source control. Load sensitive config (DB credentials, JWT signing keys) from environment variables or a vault (e.g., AWS Secrets Manager).
+- Rotate keys and credentials periodically.
+
+### 4.3 Logging & Error Handling
+- Log security-relevant events (login success/failure, role changes, data exports) to a secure audit log.
+- Mask PII in logs.
+- For errors in production, return generic messages ("Unexpected error occurred") and capture details internally.
 
 ---
-
 ## 5. API & Service Security
 
-### 5.1 HTTPS Enforcement
-- In production, redirect all HTTP traffic to HTTPS (e.g., via Vercel’s redirect rules or custom middleware).
+### 5.1 Rate Limiting & Throttling
+- Apply IP-based rate limiting (e.g., `express-rate-limit` or Vercel Edge config) on login, project creation, expense/invoice endpoints.
 
-### 5.2 CORS
-- Configure `next.config.js` or API middleware to allow **only** your front-end origin (e.g., `https://your-domain.com`).
+### 5.2 CORS Configuration
+- Allow only trusted origins (your application domain) for API calls.
+- Enable only needed methods (e.g., GET, POST, PUT, DELETE).
 
-### 5.3 API Versioning & Minimal Exposure
-- Version your API routes (e.g., `/api/v1/auth`) to handle future changes without breaking clients.
-- Return only necessary fields in JSON responses; avoid leaking internal server paths or stack traces.
+### 5.3 API Versioning & Data Exposure
+- Prefix routes with `/api/v1/`.
+- Return only necessary fields in JSON responses—avoid sending full user/password hashes.
+
+### 5.4 HTTP Methods & Status Codes
+- Use proper verbs (POST for creation, PUT/PATCH for updates, DELETE for removal).
+- Return standard HTTP status codes (200, 201, 400, 401, 403, 404, 429, 500).
 
 ---
-
 ## 6. Web Application Security Hygiene
 
-### 6.1 CSRF Protection
-- Use anti-CSRF tokens for any state-changing API calls. Integrate Next.js CSRF middleware or implement synchronizer tokens stored in cookies.
-
-### 6.2 Security Headers
-- In `next.config.js` (or a custom server), add these headers:
+- Set secure HTTP headers via Next.js `headers()`:
   - `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`
   - `X-Content-Type-Options: nosniff`
   - `X-Frame-Options: DENY`
   - `Referrer-Policy: no-referrer-when-downgrade`
-  - `Content-Security-Policy`: restrict script/style/src to self and trusted CDNs.
-
-### 6.3 Secure Cookies
-- Set `Secure`, `HttpOnly`, `SameSite=Strict` on all cookies. Avoid storing sensitive data in `localStorage`.
-
-### 6.4 Prevent XSS
-- Escape or encode all user-supplied data in React templates. Avoid `dangerouslySetInnerHTML` unless content is sanitized.
+- Secure cookies (see Session Management).
+- Avoid storing tokens or PII in `localStorage` or `sessionStorage`.
+- Use Subresource Integrity (SRI) for any CDN-loaded scripts.
 
 ---
+## 7. Infrastructure & Deployment
 
-## 7. Infrastructure & Configuration Management
+### 7.1 Docker Hardening
+- Use minimal base images (Alpine or `node:slim`).
+- Run containers as non‐root users.
+- Audit final image for vulnerabilities with tools like `Trivy`.
 
-- Harden your hosting environment (e.g., Vercel/Netlify) by disabling unnecessary endpoints (GraphQL/GraphiQL playgrounds in production).
-- Rotate secrets and API keys regularly via your secrets manager.
-- Maintain minimal privileges: e.g., database accounts should only have read/write on required tables.
-- Keep Node.js, Next.js, and all system packages up to date.
+### 7.2 CI/CD & Secrets
+- Integrate static analysis and dependency scanning (e.g., Snyk, GitHub Dependabot).
+- Store environment variables in CI/CD secrets store—never echo them in logs.
+- Disable debug flags in production builds.
+
+### 7.3 Hosting & Configuration
+- On Vercel, enforce HTTPS redirects and set secure headers.
+- Limit open ports to 80/443.
+- Keep dependencies up to date; review security advisories for Next.js, React, Drizzle, Tailwind.
 
 ---
-
 ## 8. Dependency Management
 
-- Commit and maintain `package-lock.json` to guarantee reproducible builds.
-- Integrate a vulnerability scanner (e.g., GitHub Dependabot, Snyk) to monitor and alert on CVEs in dependencies.
-- Trim unused packages; each added library increases the attack surface.
+- Maintain `package-lock.json` for deterministic installs.
+- Remove unused dependencies to shrink attack surface.
+- Regularly run SCA tools to detect vulnerable packages.
 
 ---
+## 9. Testing & Monitoring
 
-Adherence to these guidelines will ensure that **codeguide-starter** remains secure, maintainable, and resilient as it evolves. Regularly review and update this document to reflect new threats and best practices.
+- Write unit tests for business logic (profit/loss calculations) in `lib/calculations.ts`.
+- Create integration tests for API endpoints validating authentication, authorization, and input schemas.
+- Implement end-to-end tests (Cypress/Playwright) simulating user flows: login, create project, add expense.
+- Monitor logs and set up alerts for abnormal behaviors (e.g., repeated 401s, high error rates).
+
+---
+## Conclusion
+By following these guidelines, the Project Profit & Loss Tracker will be built with security woven into every layer—from the database schema and API routes to the UI and deployment pipeline. Regularly review and iterate on these practices to adapt to emerging threats and maintain a robust security posture.

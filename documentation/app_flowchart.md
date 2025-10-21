@@ -1,14 +1,19 @@
 flowchart TD
-  Start[Landing Page]
-  SignUpPage[Sign Up Page]
-  SignInPage[Sign In Page]
-  AuthAPI[Authentication API Endpoint]
-  DashboardPage[Dashboard Page]
-  Start -->|Select Sign Up| SignUpPage
-  Start -->|Select Sign In| SignInPage
-  SignUpPage -->|Submit Credentials| AuthAPI
-  SignInPage -->|Submit Credentials| AuthAPI
-  AuthAPI -->|Success| DashboardPage
-  AuthAPI -->|Error| SignUpPage
-  AuthAPI -->|Error| SignInPage
-  DashboardPage -->|Click Logout| Start
+  Start[User Opens App] --> AuthCheck{Authenticated?}
+  AuthCheck -- No --> SignIn[Sign In / Sign Up]
+  SignIn --> AuthCheck
+  AuthCheck -- Yes --> Dashboard[Dashboard]
+  Dashboard --> NewProject[Create New Project]
+  NewProject --> Dashboard
+  Dashboard --> SelectProject[Select Project]
+  SelectProject --> ProjectDetail[Project Detail View]
+  ProjectDetail --> AddExpense[Add Expense]
+  ProjectDetail --> AddInvoice[Add Invoice]
+  AddExpense --> APIAddExpense[Call Create Expense API]
+  AddInvoice --> APIAddInvoice[Call Create Invoice API]
+  APIAddExpense --> Database[Database]
+  APIAddInvoice --> Database
+  Database --> APIResponse[API Response]
+  APIResponse --> ProjectDetail
+  ProjectDetail --> UpdatePL[Recalculate Profit And Loss]
+  UpdatePL --> Dashboard
