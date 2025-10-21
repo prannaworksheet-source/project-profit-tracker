@@ -1,179 +1,204 @@
 # Backend Structure Document
 
-This document outlines the backend architecture, hosting, and infrastructure for the **codeguide-starter** project. It uses plain language so anyone can understand how the backend is set up and how it supports the application.
+This document outlines the backend setup for the Project Profit & Loss Tracker. It explains how the server side is organized, how data is stored and accessed, and how everything is hosted and secured. No prior technical knowledge is assumed.
 
 ## 1. Backend Architecture
 
-- **Framework and Design Pattern**
-  - We use **Next.js API Routes** to handle all server-side logic. These routes live alongside the frontend code in the same repository, making development and deployment simpler.
-  - The backend follows a **layered pattern**:
-    1. **API Layer**: Receives requests (login, registration, data fetch).  
-    2. **Service Layer**: Contains the core business logic (user validation, password hashing).  
-    3. **Data Access Layer**: Talks to the database via a simple ORM (e.g., Prisma or TypeORM).
+Overall, the backend is built using Next.js API Routes and a type-safe ORM, organized for clarity and future growth.
 
-- **Scalability**
-  - Stateless API routes can scale horizontally—new instances can spin up on demand.  
-  - We can add caching or a message queue (e.g., Redis or RabbitMQ) without changing the core code.
+• Framework and Design Patterns:
+  - Next.js API Routes act as the backend server: each route handles a specific business task (for example, creating a project or logging an expense).
+  - Drizzle ORM provides a database-first approach: schemas defined in code keep the database structure in sync with the application logic.
+  - Separation of concerns: API route handlers focus on request validation and response formatting, while core calculations (like profit/loss) live in their own utility files.
 
-- **Maintainability**
-  - Code for each feature is grouped by route (authentication, dashboard).  
-  - A service layer separates complex logic from request handling.
-
-- **Performance**
-  - Lightweight Node.js handlers keep response times low.  
-  - Future use of database connection pooling and Redis for caching repeated queries.
+• Support for Scalability, Maintainability, and Performance:
+  - Serverless functions (on Vercel) automatically scale based on traffic, so you only pay for what you use.
+  - Clear folder structure (`/app/api/`, `/lib/`, `/db/`, `/components/`) makes it easy for new developers to find and update code.
+  - TypeScript throughout the stack catches errors at build time, reducing runtime crashes and simplifying maintenance.
 
 ## 2. Database Management
 
-- **Database Choice**
-  - We recommend **PostgreSQL** for structured data and reliable transactions.  
-  - In-memory caching can be added later with **Redis** for session tokens or frequently read data.
+The application uses a relational (SQL) database to store structured financial data.
 
-- **Data Storage and Access**
-  - Use an ORM like **Prisma** or **TypeORM** to map JavaScript/TypeScript objects to database tables.
-  - Connection pooling ensures efficient use of database connections under load.
-  - Migrations track schema changes over time, keeping development, staging, and production in sync.
+• Database Technology:
+  - PostgreSQL database (hosted by a cloud provider).
+  - Drizzle ORM for connecting the application code to the database in a type-safe way.
 
-- **Data Practices**
-  - Passwords are never stored in plain text—they are salted and hashed with **bcrypt** before saving.
-  - All outgoing data is typed and validated to prevent malformed records.
+• Data Structure and Access:
+  - Data is organized into tables (projects, expenses, invoices). Each table has clearly defined fields and relationships.
+  - CRUD operations (Create, Read, Update, Delete) are handled with simple Drizzle queries inside API routes.
+  - Input validation with Zod (a schema validation library) ensures only correct data reaches the database.
 
 ## 3. Database Schema
 
-### Human-Readable Format
+Below is a human-friendly overview of the database tables and their key fields, followed by the SQL statements you would run to create them.
 
-- **Users**
-  - **id**: Unique identifier  
-  - **email**: User’s email address (unique)  
-  - **password_hash**: Securely hashed password  
-  - **created_at**: Account creation timestamp
+Tables and Fields (in everyday language):
 
-- **Sessions**
-  - **id**: Unique session record  
-  - **user_id**: Links to a user  
-  - **token**: Random string for authentication  
-  - **expires_at**: When the token stops working  
-  - **created_at**: When the session was created
+• projects
+  - A unique identifier
+  - Project name (text)
+  - Client name (text)
+  - Initial budget (decimal)
+  - Timestamps for when each record is created and updated
 
-- **DashboardItems** *(optional for dynamic data)*
-  - **id**: Unique record  
-  - **title**: Item title  
-  - **content**: Item details  
-  - **created_at**: When the item was added
+• expenses
+  - A unique identifier
+  - Link to the project it belongs to
+  - Expense amount (decimal)
+  - Category (text)
+  - Date of the expense
+  - Description (text)
+  - Timestamps
 
-### SQL Schema (PostgreSQL)
+• invoices
+  - A unique identifier
+  - Link to the project it belongs to
+  - Invoice amount (decimal)
+  - Status (Draft, Sent, Paid)
+  - Due date
+  - Timestamps
+
+SQL Schema (PostgreSQL):
+
 ```sql
--- Users table
-CREATE TABLE users (
+CREATE TABLE projects (
   id SERIAL PRIMARY KEY,
-  email VARCHAR(255) UNIQUE NOT NULL,
-  password_hash VARCHAR(255) NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT now()
+  name TEXT NOT NULL,
+  client TEXT,
+  initial_budget NUMERIC(12,2) NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Sessions table
-CREATE TABLE sessions (
+CREATE TABLE expenses (
   id SERIAL PRIMARY KEY,
-  user_id INT REFERENCES users(id) ON DELETE CASCADE,
-  token VARCHAR(255) UNIQUE NOT NULL,
-  expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT now()
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  amount NUMERIC(12,2) NOT NULL,
+  category TEXT,
+  expense_date DATE NOT NULL,
+  description TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Dashboard items table
-CREATE TABLE dashboard_items (
+CREATE TABLE invoices (
   id SERIAL PRIMARY KEY,
-  title TEXT NOT NULL,
-  content TEXT,
-  created_at TIMESTAMPTZ DEFAULT now()
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  amount NUMERIC(12,2) NOT NULL,
+  status TEXT CHECK(status IN ('Draft','Sent','Paid')) NOT NULL,
+  due_date DATE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
-```  
+```
 
 ## 4. API Design and Endpoints
 
-- **Approach**: We follow a **RESTful** style, grouping related endpoints under `/api` directories.
+The backend exposes a set of RESTful endpoints under `/api/`. Each one handles a specific piece of business logic:
 
-- **Key Endpoints**
-  - `POST /api/auth/register`  
-    • Accepts `{ email, password }`  
-    • Creates a new user and issues a session token  
-  - `POST /api/auth/login`  
-    • Accepts `{ email, password }`  
-    • Verifies credentials and returns a session token  
-  - `POST /api/auth/logout`  
-    • Invalidates the session token on the server  
-  - `GET /api/dashboard/data`  
-    • Requires a valid session  
-    • Returns user-specific data or dashboard items  
+• Projects Endpoints:
+  - GET `/api/projects`: List all projects.
+  - POST `/api/projects`: Create a new project (requires name, client, initial budget).
+  - GET `/api/projects/[id]`: Get details for one project.
+  - PUT `/api/projects/[id]`: Update project information.
+  - DELETE `/api/projects/[id]`: Remove a project (and its related data).
 
-- **Communication**
-  - Frontend sends JSON requests; backend replies with JSON and appropriate HTTP status codes.  
-  - Protected routes check for a valid session token (in cookies or Authorization header).
+• Expenses Endpoints:
+  - GET `/api/projects/[id]/expenses`: List all expenses for a project.
+  - POST `/api/projects/[id]/expenses`: Add a new expense (amount, category, date, description).
+  - PUT `/api/expenses/[expenseId]`: Update an existing expense.
+  - DELETE `/api/expenses/[expenseId]`: Delete an expense.
+
+• Invoices Endpoints:
+  - GET `/api/projects/[id]/invoices`: List all invoices for a project.
+  - POST `/api/projects/[id]/invoices`: Create a new invoice (amount, status, due date).
+  - PUT `/api/invoices/[invoiceId]`: Update invoice details.
+  - DELETE `/api/invoices/[invoiceId]`: Delete an invoice.
+
+Each endpoint:
+  - Validates input via Zod schemas.
+  - Uses Drizzle ORM to interact with the database.
+  - Returns a clear JSON response indicating success or error.
 
 ## 5. Hosting Solutions
 
-- **Cloud Provider**:  
-  - **Vercel** (recommended) offers seamless Next.js deployments, auto-scaling, and built-in CDN.  
-  - Alternatively, **Netlify** or any Node.js-capable host will work.
+The application backend is hosted in the cloud for ease of deployment and scaling.
 
-- **Benefits**
-  - **Reliability**: Global servers and failover across regions.  
-  - **Scalability**: Auto-scale serverless functions based on traffic.  
-  - **Cost-Effectiveness**: Pay-per-use model means low cost for small projects.
+• Cloud Provider and Platform:
+  - Vercel for serverless functions (API routes) and static assets.
+  - PostgreSQL database hosted on a managed cloud database service (e.g., PlanetScale, AWS RDS, or Supabase).
+
+• Benefits:
+  - Reliability: Uptime SLAs ensure the app is available.
+  - Scalability: Serverless functions automatically scale with demand.
+  - Cost-effectiveness: Pay-as-you-go model avoids idle server costs.
+  - Developer experience: Simple deployments with a Git push.
 
 ## 6. Infrastructure Components
 
-- **Load Balancer**
-  - Provided by the hosting platform—distributes API requests across function instances.
+Key building blocks that support performance and user experience:
 
-- **CDN (Content Delivery Network)**
-  - Vercel’s global edge network caches static assets (CSS, JS, images) for faster page loads.
+• Load Balancing:
+  - Handled automatically by the cloud platform, distributing requests across serverless instances.
 
-- **Caching**
-  - **Redis** (optional) for session storage or caching dashboard queries to reduce database load.
+• Caching:
+  - Edge caching of static assets and responses where appropriate (set via HTTP headers).
+  - Option to add a Redis instance for caching frequent database queries and session data.
 
-- **Object Storage**
-  - For file uploads or backups, integrate with AWS S3 or similar services.
+• Content Delivery Network (CDN):
+  - Vercel’s built-in CDN delivers static files and API responses from servers closest to the user, reducing latency.
 
-- **Message Queue**
-  - In future, use **RabbitMQ** or **Kafka** for background tasks (e.g., email notifications).
+• Containerization:
+  - Docker for local development ensures everyone works in the same environment.
 
 ## 7. Security Measures
 
-- **Authentication & Authorization**
-  - Passwords hashed with **bcrypt** and salted.  
-  - Session tokens stored in secure, HttpOnly cookies or Authorization headers.  
-  - Protected endpoints verify tokens before proceeding.
+Multiple layers protect data and user accounts:
 
-- **Data Encryption**
-  - **HTTPS/TLS** encrypts data in transit.  
-  - Database connections use SSL to encrypt data between the app and the database.
+• Authentication & Authorization:
+  - `better-auth` library handles user sign-up, sign-in, and session management.
+  - Role checks can be added to API routes to limit access (for example, only project owners can edit).  
 
-- **Input Validation**
-  - Every incoming request is validated (e.g., valid email format, password length) to prevent SQL injection or other attacks.
+• Data Encryption:
+  - TLS (HTTPS) encrypts data in transit between users and the server.
+  - The managed database service typically encrypts data at rest.
 
-- **Web Security Best Practices**
-  - Enable **CORS** policies to limit allowed origins.  
-  - Use **CSRF tokens** or same-site cookies to prevent cross-site requests.  
-  - Set secure headers with **Helmet** or a similar middleware.
+• Input Validation & Sanitization:
+  - Zod schemas validate and sanitize all incoming data to prevent SQL injection and malformed requests.
+
+• Secure Configuration:
+  - Environment variables for secrets (database credentials, API keys) are never checked into source control.
+  - CORS policies restrict API access to approved origins.
 
 ## 8. Monitoring and Maintenance
 
-- **Performance Monitoring**
-  - Integrate **Sentry** or **LogRocket** for real-time crash reporting and performance tracing.  
-  - Use Vercel’s built-in analytics to track request latencies and error rates.
+Keeping the backend healthy and up-to-date involves several practices:
 
-- **Logging**
-  - Structured logs (JSON) for all API requests and errors, shipped to a log management service like **Datadog** or **Logflare**.
+• Performance Monitoring & Logging:
+  - Vercel’s built-in analytics give response times and error rates.
+  - Error tracking with a service like Sentry captures exceptions in real time.
 
-- **Health Checks**
-  - Define a `/health` endpoint that returns a 200 status if the service is up and the database is reachable.
+• Database Health:
+  - Regular automated backups of the PostgreSQL database.
+  - Use Drizzle migrations to apply schema changes safely.
 
-- **Maintenance Strategies**
-  - Automated migrations run on deploy to keep the database schema up to date.  
-  - Scheduled dependency audits and security scans (e.g., `npm audit`).
-  - Regular backups of the database (daily or weekly depending on usage).
+• Continuous Integration / Deployment (CI/CD):
+  - Every code change goes through automated tests (unit tests, integration tests).
+  - Successful tests trigger a deployment to a staging environment for final review.
+
+• Routine Updates:
+  - Keep dependencies (Next.js, Drizzle ORM, etc.) up to date to receive security fixes and performance improvements.
 
 ## 9. Conclusion and Overall Backend Summary
 
-The backend for **codeguide-starter** is built on Next.js API Routes and Node.js, paired with PostgreSQL for data and optional Redis for caching. It follows a clear layered architecture that keeps code easy to maintain and extend. With RESTful endpoints for authentication and data, secure practices like password hashing and HTTPS, and hosting on Vercel for scalability and global performance, this setup meets the project’s goals for a fast, secure, and developer-friendly foundation. Future enhancements—such as background job queues, advanced monitoring, or richer data models—can be added without disrupting the core structure.
+The backend for the Project Profit & Loss Tracker is built for clarity, security, and growth:
+
+• Next.js API Routes and Drizzle ORM provide a type-safe, maintainable structure.
+• PostgreSQL stores your projects, expenses, and invoices in a relational model with clear relationships.
+• RESTful endpoints, protected by validation and authentication, make data access predictable.
+• Hosting on Vercel and a managed database ensures reliability, automatic scaling, and cost savings.
+• Infrastructure components (caching, CDN, load balancing) work together to deliver a fast user experience.
+• Security measures and monitoring practices keep both data and users safe.
+
+This setup supports the project’s goals of accurate financial tracking, real-time profit/loss calculation, and smooth user interactions—all while laying a strong foundation for future enhancements.
